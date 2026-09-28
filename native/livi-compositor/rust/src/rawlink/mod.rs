@@ -89,6 +89,8 @@ pub struct Rawlink {
     dirty: bool,
     // the first frame after HELLO carries the whole screen
     full: bool,
+    // the panel's physical size from LIVI_OUTPUT_MM, the head unit can't report it
+    panel_mm: Option<(i32, i32)>,
     // CLOCK_MONOTONIC of the oldest change not yet published
     oldest_ns: Option<u64>,
     seq: u32,
@@ -145,6 +147,10 @@ pub fn init(state: &mut LiviState, handle: &LoopHandle<'static, LiviState>) {
         .filter(|p| !p.is_empty())
         .unwrap_or_else(|| RAWLINK_DEFAULT_SOCK.to_string());
     log::info!("rawlink output {}x{}, frames.sock at {path}", size.0, size.1);
+    let panel_mm = crate::backend::size_env("LIVI_OUTPUT_MM");
+    if panel_mm.is_none() {
+        log::info!("LIVI_OUTPUT_MM unset, no panel size goes to LIVI");
+    }
     state.rawlink = Some(Rawlink {
         path,
         size,
@@ -158,6 +164,7 @@ pub fn init(state: &mut LiviState, handle: &LoopHandle<'static, LiviState>) {
         granted: false,
         dirty: true,
         full: true,
+        panel_mm,
         oldest_ns: Some(monotonic_ns()),
         seq: 0,
         touching: false,
@@ -318,6 +325,14 @@ fn key(state: &mut LiviState, code: u32, pressed: bool) {
         event_time_ms(),
         |_, _, _| FilterResult::Forward,
     );
+}
+
+/// the one output is screen 0, nothing else has a panel.
+pub fn panel_mm(state: &LiviState, screen_idx: usize) -> Option<(i32, i32)> {
+    if screen_idx != 0 {
+        return None;
+    }
+    state.rawlink.as_ref()?.panel_mm
 }
 
 pub fn damage(state: &mut LiviState) {

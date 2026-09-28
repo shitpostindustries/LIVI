@@ -26,7 +26,12 @@ pub fn from_env() -> Backend {
 
 /// LIVI_OUTPUT_SIZE as `WxH`, when it's set and sane.
 pub fn output_size_env() -> Option<(i32, i32)> {
-    let v = std::env::var("LIVI_OUTPUT_SIZE").ok()?;
+    size_env("LIVI_OUTPUT_SIZE")
+}
+
+/// a `WxH` env var, when it's set and both sides are positive.
+pub fn size_env(var: &str) -> Option<(i32, i32)> {
+    let v = std::env::var(var).ok()?;
     let (w, h) = v.split_once('x')?;
     let (w, h): (i32, i32) = (w.parse().ok()?, h.parse().ok()?);
     (w > 0 && h > 0).then_some((w, h))
@@ -85,8 +90,7 @@ pub fn can_leave_fullscreen(state: &LiviState) -> bool {
 pub fn panel_mm(state: &LiviState, screen_idx: usize) -> Option<(i32, i32)> {
     match state.backend {
         Backend::Host => crate::host::panel_mm(state, screen_idx),
-        // the head unit doesn't report its size
-        Backend::Rawlink => None,
+        Backend::Rawlink => crate::rawlink::panel_mm(state, screen_idx),
     }
 }
 
