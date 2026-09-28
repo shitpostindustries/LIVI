@@ -11,13 +11,14 @@ use std::ffi::CString;
 use std::fs::File;
 
 use smithay::backend::allocator::gbm::GbmDevice;
-use smithay::backend::allocator::Fourcc;
+use smithay::backend::allocator::dmabuf::Dmabuf;
+use smithay::backend::allocator::{Fourcc, format::FormatSet};
 use smithay::backend::egl::native::EGLSurfacelessDisplay;
 use smithay::backend::egl::{EGLContext, EGLDisplay};
 use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::{ffi, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::pixman::PixmanRenderer;
-use smithay::backend::renderer::{Bind, Color32F, Offscreen as _, Texture as _};
+use smithay::backend::renderer::{Bind, Color32F, ImportDma as _, Offscreen as _, Texture as _};
 use smithay::reexports::pixman::Image;
 
 use super::dither::{self, Lut, Rect};
@@ -125,15 +126,21 @@ pub fn select(size: (i32, i32)) -> Result<Offscreen, String> {
 }
 
 impl Offscreen {
-    /// whether clients may be offered linux-dmabuf.
-    pub fn dmabuf(&self) -> bool {
-        matches!(&self.engine, Engine::Gles(g) if g.setup.dmabuf)
+    /// the formats to offer over linux-dmabuf, None when this tier can't
+    /// import any. pixman maps linear buffers, so it offers linear only.
+    pub fn dmabuf_formats(&self) -> Option<FormatSet> {
+        match &self.engine {
+            Engine::Gles(g) if g.setup.dmabuf => Some(g.setup.renderer.dmabuf_formats()),
+            Engine::Gles(_) => None,
+            Engine::Pixman(p) => Some(p.renderer.dmabuf_formats()),
+        }
     }
 
-    pub fn gles_renderer(&mut self) -> Option<&mut GlesRenderer> {
+    /// checks a client's dmabuf against the renderer that will sample it.
+    pub fn import_dmabuf(&mut self, dmabuf: &Dmabuf) -> bool {
         match &mut self.engine {
-            Engine::Gles(g) => Some(&mut g.setup.renderer),
-            Engine::Pixman(_) => None,
+            Engine::Gles(g) => g.setup.renderer.import_dmabuf(dmabuf, None).is_ok(),
+            Engine::Pixman(p) => p.renderer.import_dmabuf(dmabuf, None).is_ok(),
         }
     }
 

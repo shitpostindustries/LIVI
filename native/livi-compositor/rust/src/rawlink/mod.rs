@@ -22,7 +22,6 @@ use smithay::input::keyboard::FilterResult;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction, RegistrationToken};
-use smithay::backend::renderer::ImportDma as _;
 use smithay::utils::SERIAL_COUNTER;
 
 use crate::render::Scene;
@@ -134,9 +133,8 @@ pub fn init(state: &mut LiviState, handle: &LoopHandle<'static, LiviState>) {
         log::error!("rawlink keyboard failed, {e}");
     }
 
-    let mut offscreen = offscreen;
-    if offscreen.dmabuf() {
-        let formats = offscreen.gles_renderer().map(|r| r.dmabuf_formats()).unwrap_or_default();
+    // pixman keeps dmabuf too, gst 1.28 waylandsink's shm path reports the unpadded stride
+    if let Some(formats) = offscreen.dmabuf_formats() {
         let _ = state.dmabuf_state.create_global::<LiviState>(&state.display_handle, formats);
     } else {
         log::info!("linux-dmabuf not advertised, the {} tier can't import it", offscreen.tier.name());
@@ -340,8 +338,7 @@ pub fn import_dmabuf(state: &mut LiviState, dmabuf: &smithay::backend::allocator
     state
         .rawlink
         .as_mut()
-        .and_then(|rl| rl.offscreen.gles_renderer())
-        .is_some_and(|r| r.import_dmabuf(dmabuf, None).is_ok())
+        .is_some_and(|rl| rl.offscreen.import_dmabuf(dmabuf))
 }
 
 /// from the loop turn. renders and publishes when a grant and a change meet.
