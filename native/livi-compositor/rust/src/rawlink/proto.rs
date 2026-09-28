@@ -13,7 +13,7 @@ const GRANT: u8 = 3;
 const TOUCH: u8 = 4;
 const KEY: u8 = 5;
 
-const VERSION: u32 = 1;
+const VERSION: u32 = 2;
 const FORMAT_RGB565: u32 = 1;
 pub const FLAG_FULL: u16 = 1;
 
@@ -64,15 +64,12 @@ pub fn hello(width: u16, height: u16, stride: u32) -> Vec<u8> {
     m
 }
 
-/// `video` and each damage rect are `x y w h`, a video `w` of 0 means none.
-pub fn frame(seq: u32, ts_ns: u64, video: [u16; 4], flags: u16, damage: &[[u16; 4]]) -> Vec<u8> {
+/// each damage rect is `x y w h`.
+pub fn frame(seq: u32, ts_ns: u64, flags: u16, damage: &[[u16; 4]]) -> Vec<u8> {
     let mut m = header(FRAME);
     m.extend_from_slice(&seq.to_le_bytes());
     m.extend_from_slice(&0u32.to_le_bytes());
     m.extend_from_slice(&ts_ns.to_le_bytes());
-    for v in video {
-        m.extend_from_slice(&v.to_le_bytes());
-    }
     m.extend_from_slice(&(damage.len() as u16).to_le_bytes());
     m.extend_from_slice(&flags.to_le_bytes());
     for r in damage {

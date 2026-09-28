@@ -11,7 +11,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::backend::ClientData;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Logical, Point};
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -72,9 +72,6 @@ pub struct TopLevel {
     pub tier_h: f64,
     /// Scene position in layout coordinates.
     pub position: Point<i32, Logical>,
-    /// where the visible content lands in layout coordinates, the part of the
-    /// surface the crop keeps.
-    pub plane: Rectangle<i32, Logical>,
 }
 
 pub struct Screen {

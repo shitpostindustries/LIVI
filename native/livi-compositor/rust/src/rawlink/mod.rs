@@ -378,7 +378,6 @@ fn bounding(rects: &[Rect]) -> Rect {
 }
 
 fn publish(state: &mut LiviState) {
-    let video = crate::layout::video_plane_rect(state, 0);
     let clear = crate::render::backdrop_color(&state.screens[0]);
     let LiviState { rawlink, screens, toplevels, video_order, cal, .. } = state;
     let rl = rawlink.as_mut().unwrap();
@@ -405,7 +404,7 @@ fn publish(state: &mut LiviState) {
     let damage: Vec<[u16; 4]> = rects.iter().map(to_u16_rect).collect();
     let ts = rl.oldest_ns.take().unwrap_or_else(monotonic_ns);
     let flags = if full { proto::FLAG_FULL } else { 0 };
-    let msg = proto::frame(rl.seq, ts, video, flags, &damage);
+    let msg = proto::frame(rl.seq, ts, flags, &damage);
     let fd = rl.link.as_ref().map(|l| l.fd.as_raw_fd());
     match fd.map(|fd| proto::send(fd, &msg)) {
         Some(Ok(())) => {

@@ -10,7 +10,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Client;
-use smithay::utils::{Point, Rectangle, Serial};
+use smithay::utils::{Point, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState,
@@ -249,7 +249,6 @@ impl XdgShellHandler for LiviState {
             tier_w: 0.0,
             tier_h: 0.0,
             position: Point::from((0, 0)),
-            plane: Rectangle::default(),
         });
     }
 
