@@ -267,7 +267,7 @@ fn handle_line(state: &mut LiviState, line: &str) {
                 s.has_backdrop_color = true;
             }
             if !dbg {
-                crate::host::damage_all(state);
+                crate::host::damage_full(state);
             }
         }
         Some("gamma") => {
@@ -280,7 +280,7 @@ fn handle_line(state: &mut LiviState, line: &str) {
             state.cal.contrast = nums[1] as f32;
             state.cal.gain = [nums[2] as f32, nums[3] as f32, nums[4] as f32];
             state.cal.active = nums.iter().any(|&v| v != 1.0);
-            crate::host::damage_all(state);
+            crate::host::damage_full(state);
         }
         _ => {}
     }

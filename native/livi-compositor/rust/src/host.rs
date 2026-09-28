@@ -44,6 +44,7 @@ pub struct HostWindow {
     /// xdg-shell: no buffer may be committed before the first configure.
     pub configured: bool,
     pub host_output: Option<WlOutput>,
+    pub damage: Option<crate::render::WindowDamage>,
 }
 
 pub struct HostState {
@@ -299,6 +300,7 @@ pub fn open_screen(state: &mut LiviState, screen_idx: usize) {
             frame_pending: false,
             configured: false,
             host_output: None,
+            damage: None,
         },
     ));
     ensure_server_output(state, screen_idx);
@@ -428,6 +430,15 @@ use smithay_client_toolkit::reexports::protocols::xdg::shell::client::xdg_toplev
 
 pub fn damage_all(state: &mut LiviState) {
     for (_, w) in state.host.windows.iter_mut() {
+        w.needs_redraw = true;
+    }
+}
+
+/// Like `damage_all`, for changes the damage trackers can't see (backdrop,
+/// calibration), so every window redraws in full.
+pub fn damage_full(state: &mut LiviState) {
+    for (_, w) in state.host.windows.iter_mut() {
+        w.damage = None;
         w.needs_redraw = true;
     }
 }
