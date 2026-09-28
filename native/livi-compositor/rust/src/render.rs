@@ -370,6 +370,9 @@ fn render_direct(
     elements: &[LiviElement<GlesRenderer>],
     clear: Color32F,
 ) -> RenderResult {
+    // egl only knows the age of the current draw surface, asking before
+    // that is BAD_SURFACE and a needless full redraw
+    unsafe { renderer.egl_context().make_current_with_surface(egl_surface)? };
     let age = egl_surface.buffer_age().unwrap_or(0).max(0) as usize;
     let mut fb = renderer.bind(egl_surface)?;
     let res = damage.tracker.render_output(renderer, &mut fb, age, elements, clear)?;
