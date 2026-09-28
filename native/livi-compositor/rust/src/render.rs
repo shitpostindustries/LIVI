@@ -3,7 +3,7 @@
 //! calibration (gamma/contrast/gain) shader pass.
 
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::memory::MemoryRenderBufferRenderElement;
+use smithay::backend::renderer::element::memory::{MemoryRenderBuffer, MemoryRenderBufferRenderElement};
 use smithay::backend::renderer::element::surface::{
     render_elements_from_surface_tree, WaylandSurfaceRenderElement,
 };
@@ -12,15 +12,16 @@ use smithay::backend::renderer::element::Kind as ElementKind;
 use smithay::backend::renderer::gles::{
     GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType,
 };
-use smithay::backend::renderer::{Bind, Color32F, Frame, Offscreen, Renderer};
+use smithay::backend::renderer::{Bind, Color32F, Frame, ImportAll, ImportMem, Offscreen, Renderer};
 use smithay::utils::{Logical, Point, Rectangle, Transform};
 
-use crate::state::{Kind, LiviState, BTN_GAP, BTN_W, TITLEBAR_H};
+use crate::deco::DecoSet;
+use crate::state::{Kind, LiviState, Screen, TopLevel, BTN_GAP, BTN_W};
 
 smithay::backend::renderer::element::render_elements! {
-    pub LiviElement<=GlesRenderer>;
-    Surface=WaylandSurfaceRenderElement<GlesRenderer>,
-    Deco=MemoryRenderBufferRenderElement<GlesRenderer>,
+    pub LiviElement<R> where R: ImportAll + ImportMem;
+    Surface=WaylandSurfaceRenderElement<R>,
+    Deco=MemoryRenderBufferRenderElement<R>,
 }
 
 // The calibration fragment shader, applied over the composited frame.
@@ -141,119 +142,116 @@ pub fn surface_under(
     found.into_inner()
 }
 
-/// Collect the render elements for one screen, top to bottom (renderer order).
-fn collect_elements(
-    state: &mut LiviState,
-    screen_idx: usize,
-) -> Vec<LiviElement> {
-    let s = &state.screens[screen_idx];
-    let (sx, sw, sh) = (s.x, s.width, s.height);
-    let fullscreen = s.fullscreen;
-    let role = s.role.clone();
-    let renderer = state.host.renderer.as_mut().unwrap();
-    let mut elements: Vec<LiviElement> = Vec::new();
-    let scale = smithay::utils::Scale::from(1.0);
+/// The parts of the compositor state a scene is built from, borrowed apart
+/// from the backend that owns the renderer.
+pub struct Scene<'a> {
+    pub screens: &'a [Screen],
+    pub toplevels: &'a [TopLevel],
+    pub video_order: &'a [usize],
+}
 
-    // Screen-local offset: the window renders layout range [sx .. sx+sw].
-    let to_local = |p: Point<i32, Logical>| Point::<i32, smithay::utils::Physical>::from((p.x - sx, p.y));
+impl<'a> Scene<'a> {
+    pub fn new(screens: &'a [Screen], toplevels: &'a [TopLevel], video_order: &'a [usize]) -> Self {
+        Self { screens, toplevels, video_order }
+    }
+}
+
+fn surface_elements<R>(
+    renderer: &mut R,
+    t: &TopLevel,
+    sx: i32,
+) -> impl Iterator<Item = LiviElement<R>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    // screen-local offset, the output renders layout range [sx .. sx+sw]
+    let loc = Point::<i32, smithay::utils::Physical>::from((t.position.x - sx, t.position.y));
+    render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<R>>(
+        renderer,
+        t.toplevel.wl_surface(),
+        loc,
+        smithay::utils::Scale::from(1.0),
+        1.0,
+        ElementKind::Unspecified,
+    )
+    .into_iter()
+    .map(LiviElement::Surface)
+}
+
+/// Collect the render elements for one screen, top to bottom (renderer order).
+pub fn collect_elements<R>(
+    renderer: &mut R,
+    scene: &Scene,
+    screen_idx: usize,
+    deco: Option<&DecoSet>,
+) -> Vec<LiviElement<R>>
+where
+    R: Renderer + ImportAll + ImportMem,
+    R::TextureId: Send + Clone + 'static,
+{
+    let s = &scene.screens[screen_idx];
+    let (sx, sw) = (s.x, s.width);
+    let mut elements: Vec<LiviElement<R>> = Vec::new();
 
     // dialogs (top)
-    for t in state.toplevels.iter().filter(|t| t.kind == Kind::Dialog && t.screen_idx == screen_idx) {
-        elements.extend(
-            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
-                renderer,
-                t.toplevel.wl_surface(),
-                to_local(t.position),
-                scale,
-                1.0,
-                ElementKind::Unspecified,
-            )
-            .into_iter()
-            .map(LiviElement::Surface),
-        );
+    for t in scene.toplevels.iter().filter(|t| t.kind == Kind::Dialog && t.screen_idx == screen_idx) {
+        elements.extend(surface_elements(renderer, t, sx));
     }
 
     // decorations
-    if !fullscreen {
-        let deco_stale = state
-            .host
-            .deco
-            .get(&screen_idx)
-            .map(|d| d.titlebar_w != sw)
-            .unwrap_or(true);
-        if deco_stale {
-            let set = crate::deco::build(&role, sw);
-            state.host.deco.insert(screen_idx, set);
-        }
-        let renderer = state.host.renderer.as_mut().unwrap();
-        if let Some(set) = state.host.deco.get(&screen_idx) {
-            let slot = BTN_W + BTN_GAP;
-            let items: [(&smithay::backend::renderer::element::memory::MemoryRenderBuffer, Point<i32, Logical>); 5] = [
-                (&set.btn_close, Point::from((sx + sw - slot, 0))),
-                (&set.btn_fs, Point::from((sx + sw - 2 * slot, 0))),
-                (&set.btn_min, Point::from((sx + sw - 3 * slot, 0))),
-                (&set.title, Point::from((sx + 12, 0))),
-                (&set.titlebar, Point::from((sx, 0))),
-            ];
-            for (buf, pos) in items {
-                if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
-                    renderer,
-                    to_local(pos).to_f64(),
-                    buf,
-                    None,
-                    None,
-                    None,
-                    ElementKind::Unspecified,
-                ) {
-                    elements.push(LiviElement::Deco(el));
-                }
+    if let Some(set) = deco {
+        let slot = BTN_W + BTN_GAP;
+        let items: [(&MemoryRenderBuffer, Point<i32, Logical>); 5] = [
+            (&set.btn_close, Point::from((sw - slot, 0))),
+            (&set.btn_fs, Point::from((sw - 2 * slot, 0))),
+            (&set.btn_min, Point::from((sw - 3 * slot, 0))),
+            (&set.title, Point::from((12, 0))),
+            (&set.titlebar, Point::from((0, 0))),
+        ];
+        for (buf, pos) in items {
+            if let Ok(el) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                pos.to_f64().to_physical(1.0),
+                buf,
+                None,
+                None,
+                None,
+                ElementKind::Unspecified,
+            ) {
+                elements.push(LiviElement::Deco(el));
             }
         }
     }
 
     // UI plane
-    let renderer = state.host.renderer.as_mut().unwrap();
-    for t in state
-        .toplevels
-        .iter()
-        .filter(|t| t.kind == Kind::Ui && t.screen_idx == screen_idx)
-    {
-        elements.extend(
-            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
-                renderer,
-                t.toplevel.wl_surface(),
-                to_local(t.position),
-                scale,
-                1.0,
-                ElementKind::Unspecified,
-            )
-            .into_iter()
-            .map(LiviElement::Surface),
-        );
+    for t in scene.toplevels.iter().filter(|t| t.kind == Kind::Ui && t.screen_idx == screen_idx) {
+        elements.extend(surface_elements(renderer, t, sx));
     }
 
     // video planes, top-to-bottom = reverse of the bottom-to-top order
-    for &vi in state.video_order.iter().rev() {
-        let Some(t) = state.toplevels.get(vi) else { continue };
+    for &vi in scene.video_order.iter().rev() {
+        let Some(t) = scene.toplevels.get(vi) else { continue };
         if t.kind != Kind::Video || t.screen_idx != screen_idx || !t.visible {
             continue;
         }
-        elements.extend(
-            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
-                renderer,
-                t.toplevel.wl_surface(),
-                to_local(t.position),
-                scale,
-                1.0,
-                ElementKind::Unspecified,
-            )
-            .into_iter()
-            .map(LiviElement::Surface),
-        );
+        elements.extend(surface_elements(renderer, t, sx));
     }
 
-    let _ = (sh, TITLEBAR_H);
     elements
+}
+
+/// Rebuild a windowed screen's decoration set when its width changed.
+fn ensure_deco(state: &mut LiviState, screen_idx: usize) {
+    let s = &state.screens[screen_idx];
+    if s.fullscreen {
+        return;
+    }
+    let stale = state.host.deco.get(&screen_idx).map(|d| d.titlebar_w != s.width).unwrap_or(true);
+    if stale {
+        let set = crate::deco::build(&s.role, s.width);
+        state.host.deco.insert(screen_idx, set);
+    }
 }
 
 pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
@@ -283,7 +281,7 @@ pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
         }
     };
 
-    let elements = collect_elements(state, screen_idx);
+    ensure_deco(state, screen_idx);
     let cal = if state.cal.active { cal_program(state) } else { None };
     let uniforms = vec![
         Uniform::new("u_gamma", state.cal.gamma),
@@ -299,11 +297,13 @@ pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
     let mut tracker = OutputDamageTracker::new((width, height), 1.0, Transform::Flipped180);
 
     let res = {
-        // Split borrow: renderer and the window's EGL surface both live in host.
-        let host = &mut state.host;
-        let renderer = host.renderer.as_mut().unwrap();
-        let hw = host
-            .windows
+        let LiviState { host, screens, toplevels, video_order, .. } = state;
+        let scene = Scene::new(screens, toplevels, video_order);
+        let crate::host::HostState { renderer, windows, deco, .. } = host;
+        let renderer = renderer.as_mut().unwrap();
+        let deco = if screens[screen_idx].fullscreen { None } else { deco.get(&screen_idx) };
+        let elements = collect_elements(renderer, &scene, screen_idx, deco);
+        let hw = windows
             .iter_mut()
             .find(|(i, _)| *i == screen_idx)
             .map(|(_, w)| w)
@@ -324,7 +324,7 @@ pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
         } else {
             match renderer.bind(&mut hw.egl_surface) {
                 Ok(mut fb) => tracker
-                    .render_output::<LiviElement, _>(renderer, &mut fb, 0, &elements, clear)
+                    .render_output::<LiviElement<GlesRenderer>, _>(renderer, &mut fb, 0, &elements, clear)
                     .map(|_| ())
                     .map_err(|e| Box::new(e) as Box<dyn std::error::Error>),
                 Err(e) => {
@@ -354,7 +354,7 @@ pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
 fn render_calibrated(
     renderer: &mut GlesRenderer,
     egl_surface: &mut smithay::backend::egl::EGLSurface,
-    elements: &[LiviElement],
+    elements: &[LiviElement<GlesRenderer>],
     clear: Color32F,
     size: (i32, i32),
     program: &GlesTexProgram,
@@ -368,7 +368,7 @@ fn render_calibrated(
         let mut offscreen_tracker =
             OutputDamageTracker::new((w, h), 1.0, Transform::Normal);
         let mut fb = renderer.bind(&mut tex)?;
-        offscreen_tracker.render_output::<LiviElement, _>(renderer, &mut fb, 0, elements, clear)?;
+        offscreen_tracker.render_output::<LiviElement<GlesRenderer>, _>(renderer, &mut fb, 0, elements, clear)?;
     }
     // the flip happens on the window blit
     let mut fb = renderer.bind(egl_surface)?;
