@@ -36,3 +36,5 @@ pub const BAYER4: [[u8; 4]; 4] = [
     [15, 7, 13, 5],
 ];
 
+/// fraction of WATCHDOG_USEC between pings, systemd's own advice is half.
+pub const WATCHDOG_FRACTION: f64 = 0.5;

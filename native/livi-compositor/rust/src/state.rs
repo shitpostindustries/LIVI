@@ -139,6 +139,7 @@ pub struct LiviState {
     pub backend: crate::backend::Backend,
     pub host: HostState,
     pub rawlink: Option<crate::rawlink::Rawlink>,
+    pub notify: crate::notify::Notify,
 
     pub ctrl_client: Option<std::os::unix::net::UnixStream>,
     /// Carries an incomplete trailing line between polls.
@@ -259,6 +260,7 @@ impl LiviState {
             backend: crate::backend::from_env(),
             host: HostState::new(),
             rawlink: None,
+            notify: crate::notify::Notify::from_env(),
             ctrl_client: None,
             ctrl_buf: String::new(),
             ctrl_out: Vec::new(),
@@ -292,14 +294,15 @@ impl LiviState {
             .position(|t| t.kind == Kind::Video && t.tag == tag)
     }
 
-    /// housekeeping after each loop turn. flushes clients, drives the backend
-    /// and checks the restart deadline.
+    /// housekeeping after each loop turn. flushes clients, drives the backend,
+    /// pings the watchdog and checks the restart deadline.
     pub fn after_dispatch(&mut self) {
         if let Some(deadline) = self.restart_deadline
             && Instant::now() >= deadline {
                 crate::spawn::force_restart(self);
             }
         crate::backend::after_dispatch(self);
+        self.notify.tick();
         self.display_handle.flush_clients().ok();
     }
 }

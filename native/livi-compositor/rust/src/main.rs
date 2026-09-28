@@ -11,6 +11,7 @@ mod deco;
 mod host;
 mod input;
 mod layout;
+mod notify;
 mod rawlink;
 mod render;
 mod shell;
@@ -59,6 +60,7 @@ fn main() {
 
     backend::init(&mut state, &event_loop.handle());
     ctrl::init(&mut state, &event_loop.handle());
+    state.notify.ready();
     spawn::spawn_startup(&mut state);
 
     log::info!(
