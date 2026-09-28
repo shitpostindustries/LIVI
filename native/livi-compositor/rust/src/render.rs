@@ -24,10 +24,23 @@ smithay::backend::renderer::element::render_elements! {
     Deco=MemoryRenderBufferRenderElement<R>,
 }
 
+/// the calibration (gamma, contrast, gain) in glsl, shared by the host shader
+/// below and the rawlink dither pass.
+pub const CAL_GLSL: &str = r#"
+uniform float u_gamma;
+uniform float u_contrast;
+uniform vec3 u_gain;
+vec3 calibrate(vec3 c) {
+    c = pow(c, vec3(1.0 / u_gamma));
+    c = (c - 0.5) * u_contrast + 0.5;
+    return clamp(c * u_gain, 0.0, 1.0);
+}
+"#;
+
 // The calibration fragment shader, applied over the composited frame.
 // Follows smithay's custom-texture-shader contract: the //_DEFINES_ line,
 // the v_coords varying and the EXTERNAL sampler variant are mandatory.
-const CAL_FRAG: &str = r#"
+const CAL_FRAG_HEAD: &str = r#"
 #version 100
 //_DEFINES_
 #if defined(EXTERNAL)
@@ -41,17 +54,14 @@ uniform sampler2D tex;
 #endif
 uniform float alpha;
 varying vec2 v_coords;
-uniform float u_gamma;
-uniform float u_contrast;
-uniform vec3 u_gain;
 #if defined(DEBUG_FLAGS)
 uniform float tint;
 #endif
+"#;
+
+const CAL_FRAG_MAIN: &str = r#"
 void main() {
-    vec3 c = texture2D(tex, v_coords).rgb;
-    c = pow(c, vec3(1.0 / u_gamma));
-    c = (c - 0.5) * u_contrast + 0.5;
-    c = clamp(c * u_gain, 0.0, 1.0);
+    vec3 c = calibrate(texture2D(tex, v_coords).rgb);
     gl_FragColor = vec4(c, 1.0) * alpha;
 }
 "#;
@@ -62,7 +72,7 @@ pub fn cal_program(state: &mut LiviState) -> Option<GlesTexProgram> {
     }
     let renderer = state.host.renderer.as_mut()?;
     match renderer.compile_custom_texture_shader(
-        CAL_FRAG,
+        format!("{CAL_FRAG_HEAD}{CAL_GLSL}{CAL_FRAG_MAIN}"),
         &[
             UniformName::new("u_gamma", UniformType::_1f),
             UniformName::new("u_contrast", UniformType::_1f),
@@ -142,7 +152,7 @@ pub fn surface_under(
     found.into_inner()
 }
 
-/// The parts of the compositor state a scene is built from, borrowed apart
+/// the parts of the compositor state a scene is built from, borrowed apart
 /// from the backend that owns the renderer.
 pub struct Scene<'a> {
     pub screens: &'a [Screen],
@@ -241,7 +251,7 @@ where
     elements
 }
 
-/// Rebuild a windowed screen's decoration set when its width changed.
+/// rebuilds a windowed screen's decorations when its width changed.
 fn ensure_deco(state: &mut LiviState, screen_idx: usize) {
     let s = &state.screens[screen_idx];
     if s.fullscreen {
@@ -254,7 +264,7 @@ fn ensure_deco(state: &mut LiviState, screen_idx: usize) {
     }
 }
 
-/// The clear colour behind everything on a screen.
+/// the clear colour behind everything on a screen.
 pub fn backdrop_color(s: &Screen) -> Color32F {
     let c = if std::env::var("LIVI_DEBUG_BG").is_ok() {
         [0.55, 0.0, 0.55, 1.0]
@@ -274,8 +284,8 @@ pub fn cal_uniforms(cal: &crate::state::CalState) -> Vec<Uniform<'static>> {
     ]
 }
 
-/// A host window's damage state, kept across frames so only what changed is
-/// redrawn. Dropped (and rebuilt at full damage) on resize or a mode change.
+/// a host window's damage state, kept across frames so only what changed is
+/// redrawn. dropped (and rebuilt at full damage) on resize or a mode change.
 pub struct WindowDamage {
     tracker: OutputDamageTracker,
     size: (i32, i32),
@@ -350,19 +360,19 @@ pub fn render_screen(state: &mut LiviState, screen_idx: usize) {
                 && let Err(e) = w.egl_surface.swap_buffers(None) {
                     log::error!("swap_buffers failed: {e}");
                 }
-            crate::host::send_frame_callbacks(state);
+            send_frame_callbacks(state);
         }
         // nothing visible changed, the host keeps the last buffer and the
         // clients still get their callbacks so they don't stall
-        Ok(false) => crate::host::send_frame_callbacks(state),
+        Ok(false) => send_frame_callbacks(state),
         Err(e) => log::error!("render failed: {e}"),
     }
 }
 
 type RenderResult = Result<bool, Box<dyn std::error::Error>>;
 
-/// Composite straight onto the window surface, reusing what its buffer age
-/// says is still there. Answers whether anything was drawn.
+/// composites straight onto the window surface, reusing what its buffer age
+/// says is still there. answers whether anything was drawn.
 fn render_direct(
     renderer: &mut GlesRenderer,
     egl_surface: &mut smithay::backend::egl::EGLSurface,
@@ -379,8 +389,8 @@ fn render_direct(
     Ok(res.damage.is_some())
 }
 
-/// Composite `elements` into the persistent offscreen texture, then draw the
-/// whole result through the calibration shader onto the window surface.
+/// composites into the persistent offscreen texture, then draws the whole
+/// result through the calibration shader onto the window surface.
 fn render_calibrated(
     renderer: &mut GlesRenderer,
     egl_surface: &mut smithay::backend::egl::EGLSurface,
@@ -426,4 +436,28 @@ fn render_calibrated(
     )?;
     let _ = frame.finish()?;
     Ok(true)
+}
+
+/// releases every pending frame callback of every toplevel tree.
+pub fn send_frame_callbacks(state: &mut LiviState) {
+    let time_ms: u32 = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u32;
+    for t in &state.toplevels {
+        smithay::wayland::compositor::with_surface_tree_downward(
+            t.toplevel.wl_surface(),
+            (),
+            |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+            |_surf, states, _| {
+                let mut guard = states
+                    .cached_state
+                    .get::<smithay::wayland::compositor::SurfaceAttributes>();
+                for cb in guard.current().frame_callbacks.drain(..) {
+                    cb.done(time_ms);
+                }
+            },
+            |_, _, _| true,
+        );
+    }
 }

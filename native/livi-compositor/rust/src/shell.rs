@@ -10,7 +10,7 @@ use smithay::reexports::wayland_server::protocol::wl_buffer::WlBuffer;
 use smithay::reexports::wayland_server::protocol::wl_seat::WlSeat;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::Client;
-use smithay::utils::{Point, Serial};
+use smithay::utils::{Point, Rectangle, Serial};
 use smithay::wayland::buffer::BufferHandler;
 use smithay::wayland::compositor::{
     get_parent, is_sync_subsurface, CompositorClientState, CompositorHandler, CompositorState,
@@ -54,7 +54,7 @@ impl CompositorHandler for LiviState {
             classify_on_initial_commit(self, idx);
             // dialogs stay centered as their content resizes
             self.center_dialog_by_surface(&root);
-            crate::host::damage_all(self);
+            crate::backend::damage_all(self);
         }
     }
 }
@@ -249,6 +249,7 @@ impl XdgShellHandler for LiviState {
             tier_w: 0.0,
             tier_h: 0.0,
             position: Point::from((0, 0)),
+            plane: Rectangle::default(),
         });
     }
 
@@ -303,7 +304,7 @@ impl XdgShellHandler for LiviState {
         if had_focus && let Some(ui) = main_ui_surface(self) {
             crate::input::focus_surface(self, &ui);
         }
-        crate::host::damage_all(self);
+        crate::backend::damage_all(self);
     }
 
     fn move_request(&mut self, _surface: ToplevelSurface, _seat: WlSeat, _serial: Serial) {
@@ -343,7 +344,7 @@ impl XdgShellHandler for LiviState {
         };
         let screen_idx = self.toplevels[idx].screen_idx;
         self.screens[screen_idx].fullscreen = true;
-        crate::host::set_fullscreen(self, screen_idx, true);
+        crate::backend::set_fullscreen(self, screen_idx, true);
         surface.with_pending_state(|st| {
             st.states.set(XdgState::Fullscreen);
         });
@@ -356,6 +357,10 @@ impl XdgShellHandler for LiviState {
     }
 
     fn unfullscreen_request(&mut self, surface: ToplevelSurface) {
+        if !crate::backend::can_leave_fullscreen(self) {
+            surface.send_configure();
+            return;
+        }
         let Some(idx) = self
             .toplevels
             .iter()
@@ -366,7 +371,7 @@ impl XdgShellHandler for LiviState {
         };
         let screen_idx = self.toplevels[idx].screen_idx;
         self.screens[screen_idx].fullscreen = false;
-        crate::host::set_fullscreen(self, screen_idx, false);
+        crate::backend::set_fullscreen(self, screen_idx, false);
         surface.with_pending_state(|st| {
             st.states.unset(XdgState::Fullscreen);
         });
@@ -447,7 +452,7 @@ impl DmabufHandler for LiviState {
     ) {
         // Validate the import against the renderer, the texture import happens
         // at render time.
-        if crate::host::import_dmabuf(self, &dmabuf) {
+        if crate::backend::import_dmabuf(self, &dmabuf) {
             let _ = notifier.successful::<LiviState>();
         } else {
             notifier.failed();

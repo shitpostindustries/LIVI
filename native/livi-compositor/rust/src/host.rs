@@ -9,7 +9,6 @@ use smithay::backend::egl::{EGLContext, EGLDisplay, EGLSurface};
 use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::backend::renderer::ImportDma;
 use smithay::reexports::calloop::LoopHandle;
-use smithay::utils::SERIAL_COUNTER;
 use smithay_client_toolkit::compositor::{CompositorHandler as SctkCompositorHandler, CompositorState as SctkCompositorState};
 use smithay_client_toolkit::output::{OutputHandler as SctkOutputHandler, OutputState as SctkOutputState};
 use calloop_wayland_source::WaylandSource;
@@ -242,13 +241,7 @@ fn default_size(state: &LiviState, screen_idx: usize) -> (i32, i32) {
     if s.req_width > 0 && s.req_height > 0 {
         return (s.req_width, s.req_height);
     }
-    if let Ok(v) = std::env::var("LIVI_OUTPUT_SIZE")
-        && let Some((w, h)) = v.split_once('x')
-            && let (Ok(w), Ok(h)) = (w.parse(), h.parse())
-                && w > 0 && h > 0 {
-                    return (w, h);
-                }
-    (1280, 720)
+    crate::backend::output_size_env().unwrap_or(crate::tuning::HOST_DEFAULT_SIZE)
 }
 
 pub fn open_screen(state: &mut LiviState, screen_idx: usize) {
@@ -335,7 +328,7 @@ pub fn close_screen(state: &mut LiviState, screen_idx: usize) {
 }
 
 /// Advertise a wl_output for this screen to the inner clients.
-fn ensure_server_output(state: &mut LiviState, screen_idx: usize) {
+pub fn ensure_server_output(state: &mut LiviState, screen_idx: usize) {
     let s = &mut state.screens[screen_idx];
     if s.output.is_some() {
         return;
@@ -353,7 +346,7 @@ fn ensure_server_output(state: &mut LiviState, screen_idx: usize) {
     output.change_current_state(
         Some(smithay::output::Mode {
             size: (s.width, s.height).into(),
-            refresh: 60_000,
+            refresh: crate::tuning::OUTPUT_REFRESH_MHZ,
         }),
         Some(smithay::utils::Transform::Normal),
         None,
@@ -361,7 +354,7 @@ fn ensure_server_output(state: &mut LiviState, screen_idx: usize) {
     );
     output.set_preferred(smithay::output::Mode {
         size: (s.width, s.height).into(),
-        refresh: 60_000,
+        refresh: crate::tuning::OUTPUT_REFRESH_MHZ,
     });
     s.output = Some(output);
 }
@@ -434,7 +427,7 @@ pub fn damage_all(state: &mut LiviState) {
     }
 }
 
-/// Like `damage_all`, for changes the damage trackers can't see (backdrop,
+/// like `damage_all`, for changes the damage trackers can't see (backdrop,
 /// calibration), so every window redraws in full.
 pub fn damage_full(state: &mut LiviState) {
     for (_, w) in state.host.windows.iter_mut() {
@@ -640,7 +633,7 @@ pub fn apply_settled_resizes(state: &mut LiviState) {
                 output.change_current_state(
                     Some(smithay::output::Mode {
                         size: (w, h).into(),
-                        refresh: 60_000,
+                        refresh: crate::tuning::OUTPUT_REFRESH_MHZ,
                     }),
                     None,
                     None,
@@ -689,7 +682,7 @@ impl SctkSeatHandler for LiviState {
             Capability::Keyboard => {
                 self.host.keyboard = seats.get_keyboard(qh, &seat, None).ok();
                 self.seat
-                    .add_keyboard(Default::default(), 600, 25)
+                    .add_keyboard(Default::default(), crate::tuning::KEY_REPEAT_DELAY_MS, crate::tuning::KEY_REPEAT_RATE)
                     .ok();
             }
             Capability::Touch => {
@@ -867,29 +860,4 @@ pub fn request_frame(state: &mut LiviState, screen_idx: usize) {
                 .frame(&qh, w.window.wl_surface().clone());
             w.frame_pending = true;
         }
-}
-
-pub fn send_frame_callbacks(state: &mut LiviState) {
-    let time_ms: u32 = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u32;
-    for t in &state.toplevels {
-        smithay::wayland::compositor::with_surface_tree_downward(
-            t.toplevel.wl_surface(),
-            (),
-            |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
-            |_surf, states, _| {
-                let mut guard = states
-                    .cached_state
-                    .get::<smithay::wayland::compositor::SurfaceAttributes>();
-                for cb in guard.current().frame_callbacks.drain(..) {
-                    cb.done(time_ms);
-                }
-            },
-            |_, _, _| true,
-        );
-    }
-    let _ = SERIAL_COUNTER;
-    let _ = Duration::ZERO;
 }

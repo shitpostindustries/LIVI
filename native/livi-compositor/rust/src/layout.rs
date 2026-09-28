@@ -2,7 +2,7 @@
 //! scaling, margins overflow off the output edge), the UI plane fills the
 //! screen below the titlebar.
 
-use smithay::utils::{Point, Size};
+use smithay::utils::{Point, Rectangle, Size};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use crate::state::{Kind, LiviState};
@@ -37,6 +37,7 @@ pub fn apply_video_layout(state: &mut LiviState, idx: usize) {
     if !t.has_crop || t.vis_w <= 0.0 || t.vis_h <= 0.0 || t.tier_w <= 0.0 || t.tier_h <= 0.0 {
         set_size(&t.toplevel, ow, oh);
         t.position = Point::from((sx, sy));
+        t.plane = Rectangle::new((sx, sy).into(), (ow, oh).into());
         log::info!("video '{}' -> screen '{role}' full {ow}x{oh} at {sx},{sy}", t.tag);
         return;
     }
@@ -50,6 +51,10 @@ pub fn apply_video_layout(state: &mut LiviState, idx: usize) {
     let py = (sy as f64 + off_y - t.crop_t * scale).round() as i32;
     set_size(&t.toplevel, tw, th);
     t.position = Point::from((px, py));
+    t.plane = Rectangle::new(
+        ((sx as f64 + off_x).round() as i32, (sy as f64 + off_y).round() as i32).into(),
+        ((t.vis_w * scale).round() as i32, (t.vis_h * scale).round() as i32).into(),
+    );
     log::info!("video '{}' -> screen '{role}' {tw}x{th} at {px},{py}", t.tag);
 }
 
@@ -75,7 +80,7 @@ pub fn apply_cfg_to_video(state: &mut LiviState, tag: &str, idx: usize) {
     if cfg.has_visible {
         state.toplevels[idx].visible = cfg.visible;
     }
-    crate::host::damage_all(state);
+    crate::backend::damage_all(state);
 }
 
 /// Place the UI plane and titlebar of a screen, ask the client for our size.
@@ -103,13 +108,16 @@ pub fn apply_ui_layout(state: &mut LiviState, screen_idx: usize) {
         });
         ui.toplevel.send_pending_configure();
     }
-    crate::host::damage_all(state);
+    crate::backend::damage_all(state);
 }
 
 pub fn toggle_fullscreen(state: &mut LiviState, screen_idx: usize) {
+    if !crate::backend::can_leave_fullscreen(state) {
+        return;
+    }
     let want = !state.screens[screen_idx].fullscreen;
     state.screens[screen_idx].fullscreen = want;
-    crate::host::set_fullscreen(state, screen_idx, want);
+    crate::backend::set_fullscreen(state, screen_idx, want);
     if let Some(ui) = state
         .toplevels
         .iter()
@@ -129,4 +137,22 @@ pub fn toggle_fullscreen(state: &mut LiviState, screen_idx: usize) {
         ui.toplevel.send_pending_configure();
     }
     apply_ui_layout(state, screen_idx);
+}
+
+/// where the topmost visible video's content shows on a screen, screen-local
+/// `x y w h`, all zero when no video is up.
+pub fn video_plane_rect(state: &LiviState, screen_idx: usize) -> [u16; 4] {
+    let s = &state.screens[screen_idx];
+    let screen = Rectangle::<i32, smithay::utils::Logical>::new((s.x, 0).into(), (s.width, s.height).into());
+    state
+        .video_order
+        .iter()
+        .rev()
+        .filter_map(|&i| state.toplevels.get(i))
+        .find(|t| t.kind == Kind::Video && t.screen_idx == screen_idx && t.visible && !t.plane.is_empty())
+        .and_then(|t| t.plane.intersection(screen))
+        .map(|r| {
+            [(r.loc.x - s.x) as u16, r.loc.y as u16, r.size.w as u16, r.size.h as u16]
+        })
+        .unwrap_or([0; 4])
 }

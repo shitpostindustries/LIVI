@@ -11,7 +11,7 @@ use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{EventLoop, Interest, Mode, PostAction};
 use smithay::reexports::wayland_server::backend::ClientData;
 use smithay::reexports::wayland_server::{Display, DisplayHandle};
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Rectangle};
 use smithay::wayland::compositor::CompositorState;
 use smithay::wayland::dmabuf::DmabufState;
 use smithay::wayland::selection::data_device::DataDeviceState;
@@ -72,6 +72,9 @@ pub struct TopLevel {
     pub tier_h: f64,
     /// Scene position in layout coordinates.
     pub position: Point<i32, Logical>,
+    /// where the visible content lands in layout coordinates, the part of the
+    /// surface the crop keeps.
+    pub plane: Rectangle<i32, Logical>,
 }
 
 pub struct Screen {
@@ -133,7 +136,9 @@ pub struct LiviState {
     pub video_cfgs: Vec<VideoCfg>,
 
     pub cal: CalState,
+    pub backend: crate::backend::Backend,
     pub host: HostState,
+    pub rawlink: Option<crate::rawlink::Rawlink>,
 
     pub ctrl_client: Option<std::os::unix::net::UnixStream>,
     /// Carries an incomplete trailing line between polls.
@@ -251,7 +256,9 @@ impl LiviState {
                 contrast: 1.0,
                 gain: [1.0, 1.0, 1.0],
             },
+            backend: crate::backend::from_env(),
             host: HostState::new(),
+            rawlink: None,
             ctrl_client: None,
             ctrl_buf: String::new(),
             ctrl_out: Vec::new(),
@@ -285,15 +292,14 @@ impl LiviState {
             .position(|t| t.kind == Kind::Video && t.tag == tag)
     }
 
-    /// Housekeeping after each loop turn: flush clients, drive host redraws,
-    /// check the restart deadline.
+    /// housekeeping after each loop turn. flushes clients, drives the backend
+    /// and checks the restart deadline.
     pub fn after_dispatch(&mut self) {
         if let Some(deadline) = self.restart_deadline
             && Instant::now() >= deadline {
                 crate::spawn::force_restart(self);
             }
-        crate::host::apply_settled_resizes(self);
-        crate::host::pump(self);
+        crate::backend::after_dispatch(self);
         self.display_handle.flush_clients().ok();
     }
 }

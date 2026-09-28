@@ -141,7 +141,7 @@ pub fn send_panels(state: &mut LiviState) {
         .iter()
         .enumerate()
         .filter_map(|(i, s)| {
-            let (mm_w, mm_h) = crate::host::panel_mm(state, i)?;
+            let (mm_w, mm_h) = crate::backend::panel_mm(state, i)?;
             if s.width > 0 && s.height > 0 {
                 Some(format!(
                     "panel {} {} {} {} {}\n",
@@ -188,9 +188,9 @@ fn handle_line(state: &mut LiviState, line: &str) {
                     state.screens[idx].req_height = h;
                 }
             if onoff != 0 {
-                crate::host::open_screen(state, idx);
+                crate::backend::open_screen(state, idx);
             } else {
-                crate::host::close_screen(state, idx);
+                crate::backend::close_screen(state, idx);
             }
         }
         Some("claim") => {
@@ -248,7 +248,7 @@ fn handle_line(state: &mut LiviState, line: &str) {
             }
             if let Some(v) = state.find_video_by_tag(&tag) {
                 state.toplevels[v].visible = onoff != 0;
-                crate::host::damage_all(state);
+                crate::backend::damage_all(state);
             }
         }
         Some("backdrop") => {
@@ -267,7 +267,7 @@ fn handle_line(state: &mut LiviState, line: &str) {
                 s.has_backdrop_color = true;
             }
             if !dbg {
-                crate::host::damage_full(state);
+                crate::backend::damage_full(state);
             }
         }
         Some("gamma") => {
@@ -280,7 +280,7 @@ fn handle_line(state: &mut LiviState, line: &str) {
             state.cal.contrast = nums[1] as f32;
             state.cal.gain = [nums[2] as f32, nums[3] as f32, nums[4] as f32];
             state.cal.active = nums.iter().any(|&v| v != 1.0);
-            crate::host::damage_full(state);
+            crate::backend::damage_full(state);
         }
         _ => {}
     }

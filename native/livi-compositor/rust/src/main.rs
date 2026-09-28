@@ -5,15 +5,18 @@
 //! composited zero-copy. The host drives video placement/crop/visibility over
 //! a control socket (LIVI_COMPOSITOR_CTRL).
 
+mod backend;
 mod ctrl;
 mod deco;
 mod host;
 mod input;
 mod layout;
+mod rawlink;
 mod render;
 mod shell;
 mod spawn;
 mod state;
+mod tuning;
 
 use std::time::Duration;
 
@@ -54,7 +57,7 @@ fn main() {
 
     let mut state = LiviState::new(&mut event_loop, startup_cmd);
 
-    host::init(&mut state, &event_loop.handle());
+    backend::init(&mut state, &event_loop.handle());
     ctrl::init(&mut state, &event_loop.handle());
     spawn::spawn_startup(&mut state);
 
